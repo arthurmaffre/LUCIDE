@@ -3,9 +3,8 @@ import math
 from torch.distributions import Categorical
 import numpy as np
 from constants import DEVICE, char2idx, BOS, EOS, VOCAB_SIZE, idx2char, MAX_LEN
-from models import FlowNet
 
-def sample_trajectory(gflow_model: FlowNet, env):
+def sample_trajectory(gflow_model, env):
     gflow_model.eval()
     state = env.reset()
     trajectory = state[:]
@@ -20,7 +19,7 @@ def sample_trajectory(gflow_model: FlowNet, env):
         reward += step_reward
     return trajectory, reward
 
-def tb_loss(gflow_model: FlowNet, trajectories, rewards):
+def tb_loss(gflow_model, trajectories, rewards):
     losses = []
     for tokens, R in zip(trajectories, rewards):
         logfwd = 0.0
@@ -59,7 +58,7 @@ def compute_bayesian_divergence(llm_model, prefix_tensor, token_tensor, prior_pr
 
 def generate(model, prompt_str, max_len=MAX_LEN):
     model.eval()
-    src = torch.tensor([[char2idx[c] for c in prompt_str]], device=DEVICE)
+    src = torch.tensor([[char2idx.get(c, char2idx['<pad>']) for c in prompt_str]], device=DEVICE)
     tgt = torch.tensor([[char2idx[BOS]]], device=DEVICE)
     generated = []
     for _ in range(max_len):
@@ -82,7 +81,6 @@ def parse_and_compute_target(prefix_str):
     except:
         return None
     
-
 def print_number_params(model):
     pn = sum(p.numel() for p in model.parameters())
     print(f"Model: {model.__class__.__name__} has: {pn:,}".replace(",", " ") + " parameters")
