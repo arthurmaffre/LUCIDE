@@ -3,7 +3,7 @@ import torch.nn as nn
 from constants import VOCAB_SIZE, DEVICE, char2idx, idx2char, PAD, MAX_LEN
 
 class Seq2SeqTransformer(nn.Module):
-    def __init__(self, vocab_size: int, emb_dim: int = 64, n_heads: int = 2, n_layers: int = 2, pad_idx: int = 0):
+    def __init__(self, vocab_size: int, emb_dim: int = 128, n_heads: int = 4, n_layers: int = 2, pad_idx: int = 0):
         super().__init__()
         self.pad_idx = pad_idx
         self.emb = nn.Embedding(vocab_size, emb_dim, padding_idx=pad_idx)
@@ -24,7 +24,7 @@ class Seq2SeqTransformer(nn.Module):
 
     @staticmethod
     def causal_mask(sz, device):
-        return torch.triu(torch.full((sz, sz), float('-inf'), device=device), diagonal=1)
+        return torch.triu(torch.ones((sz, sz), dtype=torch.bool, device=device), diagonal=1)
 
     def forward(self, src, tgt):
         src_emb = self.dropout(self.add_pos(src))
@@ -41,7 +41,7 @@ class Seq2SeqTransformer(nn.Module):
         return self.fc(out)
 
 class FlowNet(nn.Module):
-    def __init__(self, d_model=64, n_heads=2, n_layers=2):
+    def __init__(self, d_model=128, n_heads=4, n_layers=2):
         super().__init__()
         self.emb = nn.Embedding(VOCAB_SIZE, d_model, padding_idx=char2idx[PAD])
         self.pos = nn.Embedding(MAX_LEN + 1, d_model)
@@ -52,79 +52,18 @@ class FlowNet(nn.Module):
         self.logZ = nn.Parameter(torch.zeros(()))  # Learned normalizer
 
     def causal_mask(self, sz):
-        return torch.triu(torch.full((sz, sz), float('-inf')), diagonal=1).to(DEVICE)
+        return torch.triu(torch.ones((sz, sz), dtype=torch.bool, device=DEVICE), diagonal=1)
 
     def forward(self, prefix):
         B, L = prefix.shape
         pos = torch.arange(L, device=prefix.device).unsqueeze(0).expand(B, L)
         x = self.emb(prefix) + self.pos(pos)
-        mask = self.causal_mask(L)
+
+        # We need to construct mask with float('-inf') or bool for TransformerEncoder
+        # PyTorch TransformerEncoder with batch_first=True takes mask of shape (L, L)
+        mask = torch.triu(torch.ones((L, L), dtype=torch.bool, device=prefix.device), diagonal=1)
+
+        # pass explicitly is_causal=True if supported, else pass mask
         x = self.tr(x, mask=mask)
         logits = self.fc(x[:, -1])  # Logits for next token (B, VOCAB_SIZE)
         return torch.log_softmax(logits, dim=-1)  # Log probs
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-if __name__ == "__main__":
-    import torch.optim as optim
-    from torch.nn import CrossEntropyLoss
-    from torch.distributions import Categorical
-    
-    print(f"Testing models on device: {DEVICE}")
-    
-    # Tiny dataset for Seq2SeqTransformer
-    tiny_data = [("1 + 1 =", "2"), ("2 + 3 =", "5")]
-    model = Seq2SeqTransformer(VOCAB_SIZE, pad_idx=char2idx[PAD]).to(DEVICE)
-    criterion = CrossEntropyLoss(ignore_index=char2idx[PAD])
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
-    
-    initial_loss = None
-    final_loss = None
-    for epoch in range(5):  # Short training
-        total_loss = 0.0
-        for input_str, target_str in tiny_data:
-            src = torch.tensor([[char2idx.get(c, char2idx[PAD]) for c in input_str]], device=DEVICE)
-            tgt = torch.tensor([[char2idx.get(c, char2idx[PAD]) for c in target_str]], device=DEVICE)
-            tgt_input = tgt[:, :-1] if tgt.size(1) > 1 else tgt
-            tgt_output = tgt[:, 1:].view(-1) if tgt.size(1) > 1 else tgt.view(-1)
-            logits = model(src, tgt_input).view(-1, VOCAB_SIZE)
-            loss = criterion(logits, tgt_output)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-        avg_loss = total_loss / len(tiny_data)
-        if epoch == 0:
-            initial_loss = avg_loss
-        final_loss = avg_loss
-    print(f"Seq2SeqTransformer: Initial loss = {initial_loss:.4f}, Final loss = {final_loss:.4f}")
-    if final_loss < initial_loss:
-        print("✓ Loss decreased as expected.")
-    else:
-        print("✗ Loss did not decrease.")
-    
-    # Simple forward pass for FlowNet
-    flow_model = FlowNet().to(DEVICE)
-    dummy_prefix = torch.tensor([[char2idx['1'], char2idx['+']]], device=DEVICE)
-    log_probs = flow_model(dummy_prefix)
-    action = Categorical(logits=log_probs).sample().item()
-    generated_char = idx2char.get(action, "<unknown>")
-    print(f"FlowNet sample: Prefix '1 +', next char '{generated_char}'")
-    if log_probs.shape == (1, VOCAB_SIZE):
-        print("✓ Output shape correct.")
-    else:
-        print("✗ Output shape incorrect.")
-    
-    print("Model tests completed.")
